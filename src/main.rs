@@ -273,8 +273,6 @@ impl ScalarUDFImpl for FFIPlugin {
     }
 }
 fn create_context() -> datafusion::error::Result<SessionContext> {
-    // define data.
-
     let strings: ArrayRef = Arc::new(StringArray::from(vec![
         "The cat sits outside",
         "A man is playing guitar",
@@ -300,10 +298,8 @@ fn create_context() -> datafusion::error::Result<SessionContext> {
     let dist_b = Arc::new(dist_b);
     let batch = RecordBatch::try_from_iter(vec![("strings", strings), ("dist_a", dist_a), ("dist_b", dist_b)])?;
 
-    // declare a new context. In Spark API, this corresponds to a new SparkSession
     let ctx = SessionContext::new();
 
-    // declare a table in memory. In Spark API, this corresponds to createDataFrame(...).
     ctx.register_batch("t", batch)?;
     Ok(ctx)
 }
@@ -329,15 +325,11 @@ async fn run() -> anyhow::Result<()> {
         kwargs: Arc::new([]),
         signature: Signature::any(2, datafusion::logical_expr::Volatility::Volatile),
     };
-    // create the UDF
     let plugin = ScalarUDF::from(ffi_plugin);
 
-    // register the UDF with the context so it can be invoked by name and from SQL
     ctx.register_udf(plugin.clone());
 
-    // You can also invoke both pow(2, 10)  and its alias my_pow(a, b) using SQL
     let sql_df = ctx.sql("SELECT jaccard_similarity(dist_a, dist_b) FROM t").await?;
-    // let res = sql_df.collect().await?;
     sql_df.show().await?;
     
 
