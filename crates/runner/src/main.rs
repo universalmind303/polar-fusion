@@ -1,5 +1,6 @@
 use arrow::array::{GenericListArray, GenericListBuilder, Int64Builder};
 use arrow_schema::ffi::FFI_ArrowSchema;
+use arrow_schema::Field;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -184,6 +185,84 @@ fn get_lib(lib: &str) -> Result<&'static PluginAndVersion> {
         get_lib(lib)
     }
 }
+pub unsafe fn plugin_return_type(
+    fields: &[Field],
+    lib: &str,
+    symbol: &str,
+    kwargs: &[u8],
+) -> Result<Field> {
+    let plugin = get_lib(lib)?;
+    let lib = &plugin.0;
+    let major = plugin.1;
+    let minor = plugin.2;
+
+    // we deallocate the fields buffer
+    let ffi_fields = fields
+        .iter()
+        .map(|field| field.try_into().unwrap())
+        .collect::<Vec<FFI_ArrowSchema>>()
+        .into_boxed_slice();
+    let n_args = ffi_fields.len();
+    let slice_ptr = ffi_fields.as_ptr();
+
+    let mut return_value = FFI_ArrowSchema::empty();
+    let return_value_ptr = &mut return_value as *mut FFI_ArrowSchema;
+
+    if major == 0 {
+        match minor {
+            0 => {
+                // *const ArrowSchema: pointer to heap Box<ArrowSchema>
+                // usize: length of the boxed slice
+                // *mut ArrowSchema: pointer where the return value can be written
+                let symbol: libloading::Symbol<
+                    unsafe extern "C" fn(*const FFI_ArrowSchema, usize, *mut FFI_ArrowSchema),
+                > = lib
+                    .get((format!("_polars_plugin_field_{}", symbol)).as_bytes())
+                    .unwrap();
+                symbol(slice_ptr, n_args, return_value_ptr);
+            }
+            1 => {
+                // *const FFI_ArrowSchema: pointer to heap Box<FFI_ArrowSchema>
+                // usize: length of the boxed slice
+                // *mut FFI_ArrowSchema: pointer where the return value can be written
+                // *const u8: pointer to &[u8] (kwargs)
+                // usize: length of the u8 slice
+                let symbol: libloading::Symbol<
+                    unsafe extern "C" fn(
+                        *const FFI_ArrowSchema,
+                        usize,
+                        *mut FFI_ArrowSchema,
+                        *const u8,
+                        usize,
+                    ),
+                > = lib
+                    .get((format!("_polars_plugin_field_{}", symbol)).as_bytes())
+                    .unwrap();
+
+                let kwargs_ptr = kwargs.as_ptr();
+                let kwargs_len = kwargs.len();
+
+                symbol(slice_ptr, n_args, return_value_ptr, kwargs_ptr, kwargs_len);
+            }
+            _ => {
+                todo!()
+            }
+        }
+
+        let ret_val_ptr = &return_value as *const FFI_ArrowSchema;
+        if !ret_val_ptr.is_null() {
+            let out = Field::try_from(&return_value).unwrap();
+
+            Ok(out)
+        } else {
+            let msg = retrieve_error_msg(lib);
+            let msg = msg.to_string_lossy();
+            panic!("{}", msg.as_ref());
+        }
+    } else {
+        todo!()
+    }
+}
 
 unsafe fn retrieve_error_msg(lib: &Library) -> &CStr {
     let symbol: libloading::Symbol<unsafe extern "C" fn() -> *mut std::os::raw::c_char> =
@@ -205,8 +284,15 @@ impl ScalarUDFImpl for FFIPlugin {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> datafusion::error::Result<DataType> {
-        Ok(DataType::Float64)
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion::error::Result<DataType> {
+        let flds = arg_types
+            .iter()
+            .enumerate()
+            .map(|(i, dtype)| Field::new(format!("col_{i}"), dtype.clone(), true))
+            .collect::<Vec<_>>();
+        let field = unsafe { plugin_return_type(&flds, &self.lib, &self.symbol, &self.kwargs)? };
+
+        Ok(field.data_type().clone())
     }
 
     fn invoke(
@@ -327,7 +413,8 @@ async fn run() -> anyhow::Result<()> {
         lib: Arc::from(lib),
         symbol: Arc::from("jaccard_similarity"),
         kwargs: Arc::new([]),
-        signature: Signature::any(2, datafusion::logical_expr::Volatility::Volatile),
+        // we know nothing about the signature, only the return type
+        signature: Signature::variadic_any(datafusion::logical_expr::Volatility::Volatile),
     };
     let plugin = ScalarUDF::from(ffi_plugin);
 
