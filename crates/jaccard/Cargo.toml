@@ -1,0 +1,18 @@
+[package]
+name = "jaccard"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "jaccard_lib"
+crate-type = ["cdylib"]
+
+
+[dependencies]
+polars = { version = "0.37.0", default-features = false, features = ["dtype-full"] }
+polars-core = { version = "0.37.0", default-features = false }
+polars-ffi = { version = "0.37.0", default-features = false }
+polars-plan = { version = "0.37.0", default-feautres = false }
+polars-lazy = { version = "0.37.0", default-features = false }
+serde = { version = "1.0.197", features = ["derive"] }
+pyo3-polars = { version = "0.11.3", features = ["serde", "serde-pickle", "derive"] }

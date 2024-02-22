@@ -1,7 +1,7 @@
 use arrow::array::{GenericListArray, GenericListBuilder, Int64Builder};
 use arrow_schema::ffi::FFI_ArrowSchema;
 use datafusion::arrow::array::{ArrayRef, StringArray};
-use datafusion::arrow::datatypes::{DataType};
+use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionContext;
@@ -68,7 +68,6 @@ pub unsafe fn import_series(e: SeriesExport) -> Result<ArrayRef> {
             import_array(arr, &schema)
         })
         .collect::<Result<Vec<_>>>()?;
-
 
     // we only support a single chunk for now.
     let chunk0 = chunks[0].clone();
@@ -207,7 +206,6 @@ impl ScalarUDFImpl for FFIPlugin {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> datafusion::error::Result<DataType> {
-
         Ok(DataType::Float64)
     }
 
@@ -218,7 +216,7 @@ impl ScalarUDFImpl for FFIPlugin {
         unsafe {
             let plugin = get_lib(&self.lib)?;
             let lib = &plugin.0;
-            let major = plugin.1;
+            let _major = plugin.1;
             let symbol: libloading::Symbol<
                 unsafe extern "C" fn(
                     *const SeriesExport,
@@ -262,7 +260,6 @@ impl ScalarUDFImpl for FFIPlugin {
 
             if !return_value.is_null() {
                 let value = import_series(return_value)?;
-                println!("value: {:?}", value);
                 Ok(datafusion::physical_plan::ColumnarValue::Array(value))
             } else {
                 let msg = retrieve_error_msg(lib);
@@ -296,7 +293,11 @@ fn create_context() -> datafusion::error::Result<SessionContext> {
     dist_b.append_value(vec![Some(876), Some(-45), Some(9)]);
     let dist_b: GenericListArray<i32> = dist_b.finish();
     let dist_b = Arc::new(dist_b);
-    let batch = RecordBatch::try_from_iter(vec![("strings", strings), ("dist_a", dist_a), ("dist_b", dist_b)])?;
+    let batch = RecordBatch::try_from_iter(vec![
+        ("strings", strings),
+        ("dist_a", dist_a),
+        ("dist_b", dist_b),
+    ])?;
 
     let ctx = SessionContext::new();
 
@@ -316,11 +317,14 @@ struct PigLatinKwargs {
 
 async fn run() -> anyhow::Result<()> {
     let ctx = create_context()?;
+    let target_dir = env!("CARGO_MANIFEST_DIR");
+    let lib = format!("{}/../../target/debug/libjaccard_lib.dylib", target_dir);
+    let lib = std::path::Path::new(&lib);
+    let lib = lib.canonicalize()?;
+    let lib = lib.to_str().unwrap();
 
     let ffi_plugin = FFIPlugin {
-        lib: Arc::from(
-            "/Users/corygrinstead/Development/pyo3-polars/target/debug/libexpression_lib.dylib",
-        ),
+        lib: Arc::from(lib),
         symbol: Arc::from("jaccard_similarity"),
         kwargs: Arc::new([]),
         signature: Signature::any(2, datafusion::logical_expr::Volatility::Volatile),
@@ -329,9 +333,10 @@ async fn run() -> anyhow::Result<()> {
 
     ctx.register_udf(plugin.clone());
 
-    let sql_df = ctx.sql("SELECT jaccard_similarity(dist_a, dist_b) FROM t").await?;
+    let sql_df = ctx
+        .sql("SELECT jaccard_similarity(dist_a, dist_b) FROM t")
+        .await?;
     sql_df.show().await?;
-    
 
     Ok(())
 }
